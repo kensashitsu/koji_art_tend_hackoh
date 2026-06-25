@@ -1,0 +1,1063 @@
+<!--
+  麹（こうじ）育成 — 「撫でで育てる」版プロトタイプ
+  変更の核心：成長はタイマーではなく“あなたの手”が駆動する。
+    ・触れて種をまく（何か所でも）
+    ・撫でた場所へ菌糸が伸びる（指の温もりで広がる）
+    ・留まると濃くなる（手をかけた跡が残る）
+    ・離すと冷めて、そっと休む（終わらない・固まらない）
+  TUNE の数値で「もっとゆっくり」「もっと指に追従」を調整できる。
+-->
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<style>
+  :root {
+    --bg-0:#0c0907; --bg-1:#1b1410; --ink:#e7ddca;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { height:100%; overflow:hidden; background:var(--bg-0); }
+  body {
+    font-family:"Hiragino Mincho ProN","Yu Mincho","YuMincho","Songti SC",serif;
+    color:var(--ink); -webkit-tap-highlight-color:transparent;
+    -webkit-touch-callout:none;            /* iOSの長押しメニュー（コピー吹き出し等）を出さない */
+    -webkit-user-select:none; -moz-user-select:none; -ms-user-select:none; user-select:none;
+  }
+  #stage {
+    position:fixed; inset:0; display:block; touch-action:none; cursor:none;
+    -webkit-touch-callout:none;            /* キャンバス長押し時の選択・虫めがね・吹き出しを抑止 */
+    -webkit-user-select:none; user-select:none;
+  }
+
+  #hint {
+    position:fixed; left:50%; top:50%; transform:translate(-50%,-50%);
+    max-width:min(88vw,520px);
+    text-align:center; pointer-events:none; z-index:3;
+    opacity:0; transition:opacity 1.8s ease;
+    text-shadow:0 1px 12px rgba(8,5,3,.78), 0 0 4px rgba(8,5,3,.7);
+  }
+  #hint.in { opacity:1; }
+  #sign { margin:2.6em auto 0; opacity:.42; }
+  #sign #logo { display:block; width:min(28vw,112px); height:auto; margin:0 auto;
+    filter:drop-shadow(0 1px 8px rgba(8,5,3,.5)); }
+  #hint .intro { font-size:clamp(12.5px,1.9vw,15.5px); line-height:2.0;  letter-spacing:.1em; opacity:.82; }
+  #hint .cue   { margin-top:1.9em; font-size:clamp(13px,1.8vw,15px); letter-spacing:.2em; text-indent:.2em; opacity:.9; }
+  #hint .coda  { margin-top:1.5em; font-size:clamp(11px,1.5vw,12px); letter-spacing:.16em; text-indent:.16em; opacity:.5; }
+  #hint.gone { opacity:0; }
+
+  #phase {
+    position:fixed; left:50%; bottom:13%; transform:translateX(-50%);
+    font-size:clamp(13px,2vw,17px); letter-spacing:.5em; text-indent:.5em;
+    color:var(--ink); opacity:0; pointer-events:none; z-index:3;
+    transition:opacity 1.6s ease; white-space:nowrap;
+    text-shadow:0 1px 12px rgba(8,5,3,.85), 0 0 4px rgba(8,5,3,.8);
+  }
+  #phase.show { opacity:.42; }
+
+  /* はじめから（常に控えめ・完成ゲートではない） */
+  #replay {
+    position:fixed;
+    right:calc(18px + env(safe-area-inset-right,0px));
+    bottom:calc(54px + env(safe-area-inset-bottom,0px));
+    z-index:4; min-height:44px; justify-content:center;
+    border:1px solid rgba(231,221,202,.22); background:rgba(20,16,12,.3);
+    color:var(--ink); font-family:inherit; font-size:12px; display:flex; flex-direction:column; align-items:center; gap:2px;
+    padding:.6em 1.3em; border-radius:999px; cursor:pointer; opacity:0;
+    transition:opacity 1s ease, background .3s ease, border-color .3s ease;
+    pointer-events:none; backdrop-filter:blur(3px);
+  }
+  #replay.show { opacity:.4; pointer-events:auto; }
+  #replay:hover { opacity:1; background:rgba(40,30,20,.5); border-color:rgba(231,221,202,.5); }
+  #replay:focus-visible { outline:2px solid var(--ink); outline-offset:3px; }
+
+  /* 英語併記（主＝日本語／従＝小さく沈めた英語）。TUNE.bilingual=0 で body.mono が付き、英語は隠れる＝日本語のみ。 */
+  body.mono .en { display:none; }
+  body.mobile .intro .dbr { display:none; }   /* PC専用の改行はモバイルでは無効＝自然な折り返し */
+  #hint .intro-en { font-size:clamp(10px,1.4vw,12px); line-height:1.85; letter-spacing:.08em; opacity:.5; margin-top:.7em; text-transform:lowercase; }
+  #hint .cue-en   { font-size:clamp(10px,1.4vw,12px); letter-spacing:.12em; opacity:.55; margin-top:.45em; text-transform:lowercase; }
+  #hint .coda-en  { font-size:clamp(9px,1.2vw,11px); letter-spacing:.1em; opacity:.42; margin-top:.35em; text-transform:lowercase; }
+  #phase .ph-jp  { letter-spacing:.5em; text-indent:.5em; }
+  #phase .ph-en  { font-size:clamp(11px,1.6vw,13px); letter-spacing:.2em; opacity:.72; margin-top:.5em; text-transform:lowercase; }
+  #replay .rp-jp { letter-spacing:.3em; text-indent:.3em; }
+  #replay .rp-en { font-size:10px; letter-spacing:.16em; opacity:.6; text-indent:0; text-transform:lowercase; }
+
+  /* 縦長・小さい画面で導入文が詰まりすぎないよう行間を少しだけ締める */
+  @media (max-height:680px) {
+    #hint .intro { line-height:1.75; }
+    #hint .cue   { margin-top:1.3em; }
+    #hint .coda  { margin-top:1.0em; }
+  }
+  /* 下端のジェスチャーバーに相を被らせない */
+  #phase { padding-bottom:env(safe-area-inset-bottom,0px); }
+
+  /* 性能計測メータ（URLの末尾に #fps を付けたときだけ表示）*/
+  #fps {
+    position:fixed; top:calc(8px + env(safe-area-inset-top,0px)); left:8px; z-index:9;
+    display:none; font-family:ui-monospace,Menlo,monospace; font-size:11px; line-height:1.4;
+    color:#9fe0b0; background:rgba(0,0,0,.5); padding:4px 8px; border-radius:6px;
+    pointer-events:none; white-space:pre; letter-spacing:.02em;
+  }
+</style>
+
+<canvas id="stage"></canvas>
+
+<div id="hint">
+  <p class="intro">麹の発酵を抽象化した、自己永続のジェネラティブ・アート。<br class="dbr">蒸し穀物に菌糸が芽吹き、満ち、胞子化し、崩れ、<br class="dbr">静寂を経てまた生まれます。</p>
+  <p class="intro-en en">a self-renewing generative work abstracting the fermentation of koji — mycelium sprouts, blooms, spores, decays, and, after a silence, begins again.</p>
+  <p class="cue">画面に触れて種をまき、やさしく撫でて育ててください</p>
+  <p class="cue-en en">touch to sow, stroke gently to tend</p>
+  <p class="coda">同じ瞬間は二度とありません</p>
+  <p class="coda-en en">no two moments are alike</p>
+  <div id="sign"><img id="logo" alt="Hackoh" src="data:image/png;base64,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"></div>
+</div>
+<div id="phase"></div>
+<div id="fps"></div>
+<button id="replay"><span class="rp-jp">は じ め か ら</span><span class="rp-en en">begin again</span></button>
+
+<script>
+"use strict";
+
+/* ============================================================
+   TUNE — 気持ちよさの調整つまみ
+   ============================================================ */
+const TUNE = {
+  grainCount: 300,
+  seedCount:  3,
+
+  /* --- 撫でで育てる挙動 --- */
+  tendRadius: 0.13,   // 短辺比：手の効く範囲
+  tendGain:   2.6,    // 撫でで溜まる温もりの強さ（大きいほど即反応）
+  warmHalf:   0.55,   // 温もりの半減時間[s]（離すと冷める速さ）
+  baseGrow:   0.10,   // 触れずとも進む成長（前線が立つ速さ）
+  warmGrow:   0.95,   // 温もりぶんの成長加速
+  spreadWarm: 4.0,    // 指へ菌糸が伸びる強さ
+  ripen:      0.5,    // 撫で続けて濃く（房・分生子頭）になる速さ
+
+  /* --- 個体差（クローン感を消す） --- */
+  rateVar:    0.9,    // 粒ごとの成長速度のばらつき（0.55〜1.45倍）
+  wakeJitter: 0.45,   // 伝播時の発芽の遅れ[s]（一斉に芽吹かせない）
+
+  /* --- 色づき（黄麹菌の胞子化） --- */
+  sporeStart: 0.6,    // この濃さ(rich)を超えてから色づき始める
+  sporeRate:  1.0,    // 黄緑へ向かう速さ（大きいほど早く色づく）
+  greenShow:  1.6,    // 【見た目だけ】黄緑の見え方の強さ。1.0で従来どおり（量・熟す速さ・死の時計には不介入）
+
+  /* --- 過熟・崩れ・自己播種（終わらない円環） --- */
+  overRipe:   0.55,   // この胞子量を超えると過熟（崩れに入りうる）
+  peakHold:   3,      // 過熟後、崩れ始めるまで最盛を保つ最大秒（個体差）
+  declineRate:0.035,  // 崩れる速さ（小=ゆっくり褪せる。パッと消えを防ぐ）
+  reviveRate: 0.6,    // 撫でて崩れを引き戻す強さ
+  sporeCast:  0.25,   // 崩れる麹が胞子を放つ頻度（少なめ＝群がらない）
+  landChance: 0.03,   // 漂う胞子が着地して芽吹く確率/試行（ゆっくり再生）
+  liveMax:    40,     // 同時に漂える「生きた胞子」の上限
+  landRadius: 0.08,   // 胞子が着地できる距離（短辺比）
+  refractory: 32,     // 崩れた跡が再び芽吹けるまでの不応期[s]＝崩壊後の「静寂」の長さ
+  refrVar:    0.6,    // 不応期の個体ばらつき
+  ambientSeed:0.00012,// 静かな地に忘れた頃ふと芽吹く確率/粒/秒（全滅を防ぐ保険）
+  covGate:    0.18,   // 被覆率がこれを超えると新たな芽吹きを止める＝前世代が死ぬまで次を待つ（静寂を保つ）
+
+  breathSpeed:0.45, breathDepth:0.055,
+  steamMax:28, warmGlow:0.09,
+  bilingual:1,        // 1で英語を併記（主＝日本語/従＝小さな英語）。0で日本語のみへ
+
+  /* --- 地の偏り（メソ構造：栄養・湿りの低周波フィールド。場は描かず、生命の分布として現れる） --- */
+  field:        1,      // 0で無効＝完全に従来挙動（fieldStrength:0 でも同じ）
+  fieldStrength:1.0,    // 偏りの総量（0でビット単位で従来へ）。発芽・伝播・熟しを地形で偏らせる
+  fieldBed:     0.55,   // 地の terroir を下地にどれだけ見せるか（0で下地は従来の均一・前景は不変）
+  fieldDrift:   0.0,    // terroir が移ろう速さ[rad/s]（0で静止＝下地と完全一致して読みやすい。>0で下地と徐々にずれる）
+  fieldGerm:    1.7,    // 発芽・着地の地形感度（痩せ地は芽吹きにくい＝疎らに）
+  fieldSpread:  1.5,    // 伝播の地形感度（痩せ地へは伸びにくい＝前線が歪み、斑・弧をつくる）
+  fieldRich:    0,      // 熟しの地形感度。0＝老いる速さに差を付けない＝皆ほぼ同時に死ぬ＝静寂を守る（上げると静寂が壊れる）
+  fieldContrast:1.5,    // 場の高低のはっきりさ（>1で斑・縞が明瞭、1で素直）
+  fieldFloor:   0.12,   // 痩せ地の最低成長倍率（0に近いほど“死に地”が強く出る／上げると痩せ地も生きる）
+
+  /* --- 室光の色温度の弧（生命相に合わせて“空気の色”が巡る。前景・成長・タイミングには触れない） --- */
+  lightArc:   0.6,        // 0で完全に従来の一定の暖色へ戻る。上げるほど寒↔暖↔金緑の巡りが強い
+  lightLag:   2.6,        // 色が移る滑らかさ[秒]（大きいほどゆっくり＝静けさを保つ）
+  lightWash:  0.5,        // 背景（空気そのもの）の色温度シフトの強さ
+  lightGreen: 0.5,        // 胞子化のとき金緑がどれだけ混ざるか（0で混ざらない／上げ過ぎると病んだ緑）
+  lightCool: "#465a72",   // 寒色の底＝静寂。沈んだ冷たさ（真っ青にはしない）
+  lightWarm: "#dea860",   // 暖色の頂＝満開。黄金の暖かさ
+
+  /* --- 胞子の色の道筋（白→淡黄→黄緑→麹塵）：見た目だけ。量・熟す速さ・死の時計には不介入 --- */
+  sporeRamp: [
+    { pos:0.00, c:null,      a:0    },   // 白：綿のまま（着色しない）
+    { pos:0.34, c:"#e6d488", a:0.72 },   // 淡黄：ほのかに通す（強すぎないやわらかな黄）
+    { pos:0.64, c:"#c2c66a", a:0.88 },   // 黄緑
+    { pos:1.00, c:"#717c42", a:0.95 },   // 麹塵：深くくすんだ禁色の黄緑（やや緑寄り。崩れの茶へ連なる）
+  ],
+
+  col: {
+    grain:"#e4d8c0", grainHi:"#fbf4e4", grainLo:"#bfae90",
+    bloom:"#fbf8ee", frost:"#fff6e2", warm:"#ffca7a",
+    spore:"#b7b75f", sporeWash:"#9aa05a",  // （旧）分生子の黄緑 / 綿地ににじむ olive — 現在は sporeRamp を使用
+  },
+};
+
+/* ============================================================
+   デバイス階層と描画予算（スマホ版の肝）
+   ・スマホ＝粒を減らし、画面の精細度(DPR)を抑え、静かな時はコマを間引く
+   ・速い端末は画質を保ち、重い端末だけ実行中に段階的に軽くする
+   ============================================================ */
+const COARSE      = matchMedia("(pointer: coarse)").matches;   // 指で触る端末か
+const SMALLSCREEN = Math.min(screen.width, screen.height) <= 480;
+const CORES       = navigator.hardwareConcurrency || 4;
+const IS_MOBILE   = COARSE || SMALLSCREEN;
+
+const Q = {
+  mobile:    IS_MOBILE,
+  dprCap:    IS_MOBILE ? 1.5  : 2,   // 画面の精細度上限（全画面処理にも効くので控えめに）
+  extraTuft: true,                    // 房の最上層（重い端末でだけ後から切る）
+  blendWash: true,                    // 綿地の色のなめらかな混色（同上）
+  idleThrottle: IS_MOBILE,            // 何も動かない時はコマを間引いて電池を守る
+  // 満開で湯気が「量・大きさ・頻度」と三重に膨らむのを、スマホでは穏やかに抑える
+  steamDensityK: IS_MOBILE ? 6   : 40,   // 満開で増える上限枚数の伸び
+  steamScaleK:   IS_MOBILE ? 0.35: 0.8,  // 満開で大きくなる伸び
+};
+if (IS_MOBILE) {
+  // 粒は少なめ＝一粒が大きく、指で撫でやすく、軽い（縦構図にも合う）
+  TUNE.grainCount = (CORES <= 4 || SMALLSCREEN) ? 130 : 190;
+  TUNE.steamMax   = 18;   // 湯気を控えめに
+  TUNE.liveMax    = 26;   // 漂う胞子を控えめに
+}
+
+/* ============================================================
+   セットアップ
+   ============================================================ */
+const canvas  = document.getElementById("stage");
+const ctx     = canvas.getContext("2d", { alpha:false });
+const hintEl  = document.getElementById("hint");
+const phaseEl = document.getElementById("phase");
+const replayEl= document.getElementById("replay");
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+let W=0, H=0, DPR=1;
+let tray = { x:0, y:0, w:0, h:0, r:0 };
+let grains = [];
+let stageCanvas = null;
+let bloomSprite=null, steamSprite=null;
+let tuftSprites=[], seedGlow=null, headSprites=[];
+let headRamp=[], sporeGlowRamp=[], shadowSprite=null, spentGlow=null;   // 胞子化の色ランプ/綿地の色ランプ/影/枯れ色
+
+let seeded=false, taught=false, greened=false;
+let coverage=0, bedDensity=0, bedSpore=0;
+let ambWarm=0, ambGreen=0;   // 室光の色温度（なめらかに追従。生命相を読むだけ）
+
+const steam=[], motes=[];
+let pointer = { x:-1, y:-1, active:false, lastPuff:0 };
+
+/* ---- レイアウト ---- */
+function layout() {
+  DPR = Math.min(window.devicePixelRatio || 1, Q.dprCap);
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width  = W*DPR; canvas.height = H*DPR;
+  canvas.style.width = W+"px"; canvas.style.height = H+"px";
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+
+  // 向きで構図を変える：横持ち＝麹蓋の横長(1.45)。縦持ち＝画面を活かす縦長の器へ。
+  const portrait = H > W;
+  const m = Math.min(W,H) * (portrait ? 0.055 : 0.10);   // 縦は余白を詰めて大きく使う
+  let tw = W-m*2, th = H-m*2;
+  const aspect = portrait ? Math.max(0.66, Math.min(0.92, tw/th)) : 1.45;
+  if (tw/th > aspect) tw = th*aspect; else th = tw/aspect;
+  tray.w=tw; tray.h=th; tray.x=(W-tw)/2; tray.y=(H-th)/2;
+  tray.r=Math.min(tw,th)*0.05;
+
+  if (!grains.length) makeGrains();   // 粒は一度だけ生成（正規化座標で保持）
+  placeGrains();                       // 画面サイズに合わせて配置（育ち具合は保つ）
+  rebuildNeighbors();
+  buildStage();
+}
+
+/* ---- スプライト生成（元実装を踏襲） ---- */
+function makeGlow(size, inner, outer) {
+  const c=document.createElement("canvas"); c.width=c.height=size;
+  const g=c.getContext("2d");
+  const gr=g.createRadialGradient(size/2,size/2,0,size/2,size/2,size/2);
+  gr.addColorStop(0,inner); gr.addColorStop(1,outer);
+  g.fillStyle=gr; g.fillRect(0,0,size,size); return c;
+}
+function makeTuft(size, mains) {
+  const c=document.createElement("canvas"); c.width=c.height=size;
+  const g=c.getContext("2d"); const R=size*0.46;
+  g.translate(size/2,size/2);
+  const ug=g.createRadialGradient(0,0,0,0,0,size/2);
+  ug.addColorStop(0,"rgba(252,249,240,0.6)");
+  ug.addColorStop(0.45,"rgba(252,249,240,0.14)");
+  ug.addColorStop(1,"rgba(252,249,240,0)");
+  g.fillStyle=ug; g.beginPath(); g.arc(0,0,size/2,0,6.2832); g.fill();
+  g.shadowColor="rgba(255,253,247,0.55)"; g.shadowBlur=size*0.02; g.lineCap="round";
+  function strand(x,y,ang,len,wdt,depth) {
+    const wob=(Math.random()-0.5)*0.6;
+    const mx=x+Math.cos(ang+wob)*len*0.5, my=y+Math.sin(ang+wob)*len*0.5;
+    const ex=x+Math.cos(ang)*len, ey=y+Math.sin(ang)*len;
+    g.lineWidth=wdt; g.strokeStyle="rgba(255,255,253,"+(0.13+Math.random()*0.2)+")";
+    g.beginPath(); g.moveTo(x,y); g.quadraticCurveTo(mx,my,ex,ey); g.stroke();
+    if (depth>0 && len>size*0.05) {
+      const n=1+(Math.random()*2|0);
+      for (let i=0;i<n;i++) strand(ex,ey,ang+(Math.random()-0.5)*1.1,len*(0.55+Math.random()*0.2),wdt*0.72,depth-1);
+    } else {
+      g.fillStyle="rgba(255,255,252,0.6)";
+      g.beginPath(); g.arc(ex,ey,size*0.017,0,6.2832); g.fill();
+    }
+  }
+  for (let i=0;i<mains;i++) {
+    const a=Math.random()*6.2832, r=R*(0.32+Math.random()*0.38);
+    strand(0,0,a,r,size*(0.006+Math.random()*0.006),3);
+  }
+  g.shadowBlur=0; return c;
+}
+function makeSporeHead(size) {
+  const c=document.createElement("canvas"); c.width=c.height=size;
+  const g=c.getContext("2d"); g.translate(size/2,size/2); const R=size*0.36;
+  const ug=g.createRadialGradient(0,0,0,0,0,R*1.5);
+  ug.addColorStop(0,"rgba(252,250,242,0.55)"); ug.addColorStop(1,"rgba(252,250,242,0)");
+  g.fillStyle=ug; g.beginPath(); g.arc(0,0,R*1.5,0,6.2832); g.fill();
+  g.lineCap="round"; g.shadowColor="rgba(255,253,246,0.55)"; g.shadowBlur=size*0.02;
+  function ring(rr,n,dot,lw,alpha) {
+    for (let i=0;i<n;i++) {
+      const a=(i/n)*6.2832+(Math.random()-0.5)*0.2, r=rr*(0.86+Math.random()*0.18);
+      if (lw>0){g.strokeStyle="rgba(255,255,252,0.35)";g.lineWidth=lw;g.beginPath();g.moveTo(0,0);g.lineTo(Math.cos(a)*r*0.7,Math.sin(a)*r*0.7);g.stroke();}
+      g.fillStyle="rgba(255,253,244,"+alpha+")";
+      g.beginPath(); g.arc(Math.cos(a)*r,Math.sin(a)*r,dot,0,6.2832); g.fill();
+    }
+  }
+  ring(R,34,size*0.025,size*0.006,0.9);
+  ring(R*0.62,18,size*0.02,0,0.66);
+  g.shadowBlur=0;
+  const vg=g.createRadialGradient(0,0,0,0,0,R*0.42);
+  vg.addColorStop(0,"rgba(255,243,220,0.9)"); vg.addColorStop(1,"rgba(255,243,220,0)");
+  g.fillStyle=vg; g.beginPath(); g.arc(0,0,R*0.42,0,6.2832); g.fill();
+  return c;
+}
+// 白いスプライトを着色した複製を作る（シルエットと明暗は保ち、色だけ寄せる）
+function tintSprite(src, color, amt) {
+  const c=document.createElement("canvas"); c.width=src.width; c.height=src.height;
+  const g=c.getContext("2d");
+  g.drawImage(src,0,0);
+  g.globalCompositeOperation="source-atop";   // 既に絵のある所だけ色を乗せる
+  g.globalAlpha=amt; g.fillStyle=color; g.fillRect(0,0,c.width,c.height);
+  return c;
+}
+function buildSprites() {
+  bloomSprite=makeGlow(96,"rgba(251,248,238,0.95)","rgba(251,248,238,0)");
+  steamSprite=makeGlow(128,"rgba(255,250,240,0.5)","rgba(255,250,240,0)");
+  tuftSprites=[makeTuft(148,30),makeTuft(138,34),makeTuft(130,26),makeTuft(154,32),makeTuft(134,28),
+               makeTuft(144,31),makeTuft(132,27),makeTuft(150,33),makeTuft(136,29),makeTuft(140,25)];
+  headSprites=[makeSporeHead(104),makeSporeHead(116),makeSporeHead(92),makeSporeHead(124)];
+  // 分生子頭の色ランプ：各ストップごとに白スプライトを着色した版を用意（白→淡黄→黄緑→麹塵）
+  headRamp=TUNE.sporeRamp.map(s=> s.c==null ? headSprites : headSprites.map(h=>tintSprite(h, s.c, s.a)));
+  seedGlow=makeGlow(64,"rgba(255,198,124,0.95)","rgba(255,198,124,0)");
+  // 綿地ににじむ色も同じ道筋で。白を除いた淡黄・黄緑・麹塵の3枚を持ち、胞子の進みで切り替える
+  sporeGlowRamp=TUNE.sporeRamp.filter(s=>s.c).map(s=>makeGlow(96, hexA(s.c,0.9), hexA(s.c,0)));
+  shadowSprite=makeGlow(96,"rgba(40,30,16,0.5)","rgba(40,30,16,0)");        // 分生子頭の陰（source-overで軽く）
+  spentGlow=makeGlow(96,"rgba(150,120,80,0.85)","rgba(150,120,80,0)");      // 老い・枯れの鈍い茶
+}
+
+/* ---- 米粒を生成（正規化座標。育ち状態を保つため一度だけ） ---- */
+function makeGrains() {
+  grains=[];
+  const area=tray.w*tray.h;
+  const cell=Math.sqrt(area/TUNE.grainCount);
+  const cols=Math.max(1,Math.round(tray.w/cell));
+  const rows=Math.max(1,Math.round(tray.h/cell));
+  const gx=tray.w/cols, gy=tray.h/rows;
+  for (let r=0;r<rows;r++) for (let c=0;c<cols;c++) {
+    const jx=(Math.random()-0.5)*gx*0.85, jy=(Math.random()-0.5)*gy*0.85;
+    const g={
+      nx:((c+0.5)*gx+jx)/tray.w, ny:((r+0.5)*gy+jy)/tray.h,  // 0..1 トレイ内座標
+      lr:0.8+Math.random()*0.5, ang:Math.random()*Math.PI, tone:0.85+Math.random()*0.3,
+      infected:false, bloom:0, warm:0, rich:0, spore:0, decline:0, refr:0, dying:false, seedAge:9, be:1, declRate:0.5+Math.random()*1.2, hold:-1, field:0.5,
+      rate:0.55+Math.random()*TUNE.rateVar, wake:0, bright:0.82+Math.random()*0.36,
+      twPhase:Math.random()*6.28, jph:Math.random()*6.28, jx:0, jy:0,
+      nbrs:[], hyph:[],
+      lump:0.9+Math.random()*0.55, tuft:Math.random()*10|0,
+      frot:Math.random()*6.2832, fsc:0.85+Math.random()*0.6,
+      tax:0.8+Math.random()*0.45, tay:0.8+Math.random()*0.45, tsk:(Math.random()-0.5)*0.35,
+      cax:0.78+Math.random()*0.44, cay:0.78+Math.random()*0.44, crot:Math.random()*6.2832,
+      cdx:(Math.random()-0.5)*0.5, cdy:(Math.random()-0.5)*0.5,
+      head:Math.random()<0.72, hidx:Math.random()*4|0, hrot:Math.random()*6.2832,
+      sprouts:[], moya:[],
+    };
+    const ns=(Q.mobile?2:3)+(Math.random()*2|0);
+    for (let k=0;k<ns;k++) g.sprouts.push({ang:Math.random()*6.2832,len:1.0+Math.random()*0.7,bend:(Math.random()-0.5)*0.9});
+    if (Math.random()<0.55) {
+      const nm=1+(Math.random()<0.5?1:0);
+      for (let k=0;k<nm;k++) g.moya.push({ang:Math.random()*6.2832,len:1.8+Math.random()*1.2,bend:(Math.random()-0.5)*1.0,ph:Math.random()*6.2832});
+    }
+    grains.push(g);
+  }
+}
+function placeGrains() {
+  const area=tray.w*tray.h;
+  const cell=Math.sqrt(area/grains.length);
+  for (const g of grains) {
+    g.x=tray.x+g.nx*tray.w;
+    g.y=tray.y+g.ny*tray.h;
+    g.len=cell*0.62*g.lr;
+  }
+}
+function rebuildNeighbors() {
+  const cell=Math.sqrt((tray.w*tray.h)/grains.length);
+  const R=cell*1.7, R2=R*R;
+  for (const g of grains){ g.nbrs.length=0; g.hyph.length=0; }
+  for (let i=0;i<grains.length;i++) {
+    const a=grains[i];
+    for (let j=i+1;j<grains.length;j++) {
+      const b=grains[j], dx=a.x-b.x, dy=a.y-b.y;
+      if (dx*dx+dy*dy<R2){a.nbrs.push(j);b.nbrs.push(i);}
+    }
+  }
+  for (let i=0;i<grains.length;i++) {
+    const a=grains[i];
+    const sorted=a.nbrs.map(j=>({j,d:(a.x-grains[j].x)**2+(a.y-grains[j].y)**2})).sort((p,q)=>p.d-q.d).slice(0,2);
+    a.hyph=sorted.map(s=>s.j);
+  }
+}
+
+/* ---- 下地 ---- */
+function buildStage() {
+  stageCanvas=document.createElement("canvas");
+  stageCanvas.width=W*DPR; stageCanvas.height=H*DPR;
+  const s=stageCanvas.getContext("2d"); s.setTransform(DPR,0,0,DPR,0,0);
+  const bg=s.createRadialGradient(W/2,H*0.42,0,W/2,H*0.5,Math.max(W,H)*0.75);
+  bg.addColorStop(0,"#241a12"); bg.addColorStop(0.55,"#1b1410"); bg.addColorStop(1,"#0c0907");
+  s.fillStyle=bg; s.fillRect(0,0,W,H);
+  roundRect(s,tray.x,tray.y,tray.w,tray.h,tray.r);
+  s.fillStyle="rgba(0,0,0,0.30)"; s.fill();
+  s.save(); roundRect(s,tray.x,tray.y,tray.w,tray.h,tray.r); s.clip();
+  const inner=s.createRadialGradient(W/2,H/2,Math.min(tray.w,tray.h)*0.18,W/2,H/2,Math.max(tray.w,tray.h)*0.62);
+  inner.addColorStop(0,"rgba(40,28,18,0)"); inner.addColorStop(1,"rgba(0,0,0,0.5)");
+  s.fillStyle=inner; s.fillRect(tray.x,tray.y,tray.w,tray.h); s.restore();
+
+  // 地の terroir をうっすら下地へ焼き込む。生命の“下”なので前景（房・緑・菌糸）は一切潰さない。
+  // soft-light：中庸(128)は無変化、濃い地はわずかに明るく暖かく、痩せ地は沈む。
+  if (TUNE.field && TUNE.fieldBed>0) {
+    const mw=56, mh=Math.max(8, Math.round(56/Math.max(0.3,tray.w/tray.h)));
+    const mc=document.createElement("canvas"); mc.width=mw; mc.height=mh;
+    const mg=mc.getContext("2d");
+    for (let yy=0; yy<mh; yy++) for (let xx=0; xx<mw; xx++) {
+      const f=fieldAt((xx+0.5)/mw,(yy+0.5)/mh,0);          // 静止位相0＝ダイナミクスの地と一致
+      const v=Math.max(0, Math.min(255, Math.round(128 + (f-0.5)*180)));
+      mg.fillStyle=`rgb(${v},${Math.round(v*0.96)},${Math.round(v*0.88)})`;  // 濃い地はやや暖色
+      mg.fillRect(xx,yy,1,1);
+    }
+    s.save(); roundRect(s,tray.x,tray.y,tray.w,tray.h,tray.r); s.clip();
+    s.globalCompositeOperation="soft-light"; s.globalAlpha=TUNE.fieldBed; s.imageSmoothingEnabled=true;
+    s.drawImage(mc, tray.x, tray.y, tray.w, tray.h);
+    s.globalAlpha=1; s.globalCompositeOperation="source-over"; s.restore();
+  }
+
+  roundRect(s,tray.x,tray.y,tray.w,tray.h,tray.r);
+  s.lineWidth=1.5; s.strokeStyle="rgba(255,196,122,0.10)"; s.stroke();
+
+}
+
+/* ============================================================
+   種まき・手入れ（成長の駆動はすべてここ）
+   ============================================================ */
+function plantAt(px,py) {
+  const seeds=grains.map((g,i)=>({i,d:(g.x-px)**2+(g.y-py)**2})).sort((a,b)=>a.d-b.d).slice(0,TUNE.seedCount+3);
+  let planted=false;
+  for (let k=0;k<seeds.length && k<TUNE.seedCount;k++) {
+    const g=grains[seeds[k].i];
+    if (!g.infected){ g.infected=true; g.bloom=Math.max(g.bloom,0.06); g.seedAge=0; planted=true; }
+    g.warm=Math.min(1,g.warm+0.7);
+  }
+  if (planted) {
+    if (!reduceMotion) for (let i=0;i<(Q.mobile?3:8);i++) steam.push(makeSteam(px+(Math.random()-0.5)*40,py+(Math.random()-0.5)*40,0.5));
+    if (!seeded){ seeded=true; hintEl.classList.add("gone"); replayEl.classList.add("show"); }
+    if (!taught){ taught=true; setTimeout(()=>sayPhase("や さ し く 、 な で て","tend it, gently"),900); }
+  }
+  return planted;
+}
+
+// 撫でで温もりを置く（指のまわりに栄養＝熱を与える）
+function tendAt(px,py,dt) {
+  const R=Math.min(W,H)*TUNE.tendRadius, R2=R*R;
+  for (const g of grains) {
+    const dx=g.x-px, dy=g.y-py, d2=dx*dx+dy*dy;
+    if (d2>R2) continue;
+    const f=1-Math.sqrt(d2)/R;
+    g.warm=Math.min(1, g.warm + f*f*TUNE.tendGain*dt);
+  }
+}
+
+/* ---- 地の偏り（terroir）：不可視の低周波フィールド ---- */
+let fieldPhase=0;
+function fieldAt(nx,ny,ph){
+  // 数本の低周波サインの和＝なだらかな高低。中央/縁で差が出る同心項で弧（フェアリーリング的）も生む。
+  let v = Math.sin((nx*2.3 + ny*0.7)*6.2832 + ph*0.9)
+        + Math.sin((nx*0.6 - ny*1.9)*6.2832 - ph*0.7)*0.8
+        + Math.sin((nx*1.3 + ny*1.5)*6.2832 + ph*1.3)*0.6
+        + Math.cos(Math.sqrt((nx-0.5)*(nx-0.5)+(ny-0.5)*(ny-0.5))*6.2832*2.4 - ph*0.5)*0.5;
+  v = 0.5 + v/5.8;                                  // 約 0..1 へ
+  v = 0.5 + (v-0.5)*TUNE.fieldContrast;             // 高低のはっきりさ
+  return v<0?0:(v>1?1:v);
+}
+// 1以下の倍率＝「痩せ地を遅くするだけ・肥えた地は速くしない」。これで全体の進みが元より速くなる
+// ことは無く、世代交代の静寂（皆がほぼ同時に死ぬ間）が壊れない。場所のむらは“遅さの差”で出す。
+// fieldStrength:0 または 場が中庸(0.5) のとき必ず 1（＝従来と同一）。
+function biasF(field,sens){
+  let f = 1 + TUNE.fieldStrength*sens*((field-0.5)*2);
+  if (f>1) f=1;                                  // 肥えた地でも最速＝従来どおり（加速しない）
+  return f<TUNE.fieldFloor ? TUNE.fieldFloor : f;  // 痩せ地でも0にはしない（死に地を防ぐ）
+}
+
+/* ---- 成長（タイマーなし：温もりが広げ、撫でが濃くする） ---- */
+function grow(dt) {
+  const wd=Math.exp(-dt/TUNE.warmHalf);   // 温もりは時間で冷める
+  let bloomSum=0, sporeSum=0, infCount=0;
+  let liveCount=0; for (const m of motes) if (m.live) liveCount++;
+  // 地形を更新（全粒・1パス。場はゆっくり移ろう）。field:0 のときは中庸固定＝偏り無し。
+  if (TUNE.field){ fieldPhase += dt*TUNE.fieldDrift; for (const g of grains) g.field=fieldAt(g.nx,g.ny,fieldPhase); }
+  else { for (const g of grains) g.field=0.5; }
+  for (const g of grains) {
+    g.warm*=wd; if (g.warm<1e-3) g.warm=0;
+    if (!g.infected) {
+      if (g.refr>0) g.refr-=dt;                                   // 枯れ跡が癒える不応期（この間は芽吹けない）
+      else if (Math.random()<TUNE.ambientSeed*Math.max(0,1-coverage/TUNE.covGate)*dt*biasF(g.field,TUNE.fieldGerm)) {  // 盤面が空いた時だけ、地形の濃い所にふと芽吹く
+        g.infected=true; g.bloom=0.04; g.seedAge=0; g.be=0; g.wake=Math.random()*TUNE.wakeJitter;
+      }
+      continue;
+    }
+    infCount++;
+    g.seedAge+=dt;
+    { const s=Math.min(1,g.seedAge/2.2); g.be=s*s*(3-2*s); }   // 発芽からの立ち上がり（全描画層で共有）
+    if (g.wake>0){ g.wake-=dt; bloomSum+=g.bloom; sporeSum+=g.spore; continue; }  // 発芽待ち（同期を崩す）
+    const rate=(TUNE.baseGrow + g.warm*TUNE.warmGrow)*g.rate;
+    if (g.bloom<1) g.bloom=Math.min(1,g.bloom+dt*rate);
+    bloomSum+=g.bloom;
+    // 手をかけた所ほど濃くなる（房・分生子頭へ）— 跡が残る
+    if (g.bloom>0.45 && g.decline<0.5) g.rich=Math.min(1, g.rich + (g.warm*TUNE.ripen*dt + 0.06*dt)*biasF(g.field,TUNE.fieldRich));
+    // 熟したら胞子化＝黄緑へ。放っておいても少しずつ進む（白で固まらない）
+    if (g.rich>TUNE.sporeStart && !g.dying) g.spore=Math.min(1, g.spore + (0.04+g.warm*0.07)*TUNE.sporeRate*dt);  // 過熟に達したら上昇停止＝点滅しない
+    sporeSum+=g.spore;
+    // 過熟入り：胞子が回ったら「一生の時計」を一度だけ開始（dyingで再発火を防ぐ＝凍結バグの修正）
+    if (!g.dying && g.spore>TUNE.overRipe) { g.dying=true; g.hold=Math.random()*TUNE.peakHold; }
+    // 最盛 → 崩れ → 還元（hold が 0 を割っても decline は進む）
+    if (g.dying) {
+      if (g.warm>0.02) {
+        g.decline=Math.max(0, g.decline - g.warm*TUNE.reviveRate*dt);              // 撫でれば引き戻る
+        if (g.decline<=0) g.hold=Math.random()*TUNE.peakHold;                      // 看取り直し＝最盛に戻る
+      } else if (g.hold>0) {
+        g.hold-=dt;                                                                // しばらく最盛を保つ
+      } else {
+        g.decline=Math.min(1, g.decline + TUNE.declineRate*g.declRate*dt);         // やがて崩れる
+        g.spore =Math.max(0, g.spore - TUNE.declineRate*g.declRate*dt*1.8);        // 胞子は飛び去り、緑が引く
+      }
+      // 崩れながら胞子を放つ（次世代の種）
+      if (!reduceMotion && g.decline>0.12 && liveCount<TUNE.liveMax && Math.random()<TUNE.sporeCast*dt) {
+        motes.push(makeMote(g.x,g.y,true)); liveCount++;
+      }
+      // 崩れきったら、静かな地へ還る（再び蒔ける）
+      if (g.decline>=1) { g.infected=false; g.bloom=0; g.rich=0; g.spore=0; g.decline=0; g.hold=-1; g.dying=false; g.warm=0; g.be=0; g.seedAge=0; g.refr=TUNE.refractory*(1-TUNE.refrVar*0.5+Math.random()*TUNE.refrVar); }
+    }
+    // 広がるのは若い縁だけ（熟した内側はもう隣を誘わない＝前線として進む）
+    if (g.bloom>0.3 && g.rich<0.5 && g.decline<0.2) {
+      for (const j of g.nbrs) {
+        const n=grains[j];
+        if (n.infected || n.refr>0) continue;
+        const p=(0.2 + n.warm*TUNE.spreadWarm)*dt*biasF(n.field,TUNE.fieldSpread);   // 濃い地へ向かって速く＝前線が歪む
+        if (Math.random()<p) {
+          n.infected=true; n.bloom=Math.max(n.bloom,0.04); n.seedAge=0; n.be=0; n.wake=Math.random()*TUNE.wakeJitter;
+          if (!reduceMotion && motes.length<120 && Math.random()<0.25) motes.push(makeMote(n.x,n.y));
+        }
+      }
+    }
+  }
+  coverage=infCount/grains.length;
+  bedDensity=bloomSum/grains.length;
+  bedSpore=sporeSum/grains.length;
+  // （「色 が 立 つ」の文字は廃止：緑が色そのもので見えるため、言葉での告知は不要）
+}
+
+/* ---- はじめから ---- */
+function reset() {
+  for (const g of grains){ g.infected=false; g.bloom=0; g.warm=0; g.rich=0; g.spore=0; g.decline=0; g.refr=0; g.dying=false; g.hold=-1; g.wake=0; g.jx=0; g.jy=0; }
+  motes.length=0; steam.length=0;
+  seeded=false; taught=false; greened=false; coverage=0; bedDensity=0; bedSpore=0;
+  hintEl.classList.remove("gone");
+  replayEl.classList.remove("show");
+  phaseEl.classList.remove("show");
+}
+
+let phaseTimer=null;
+function sayPhase(jp, en) {
+  phaseEl.innerHTML = `<div class="ph-jp">${jp}</div>` + (en ? `<div class="ph-en en">${en}</div>` : "");
+  phaseEl.classList.add("show");
+  clearTimeout(phaseTimer);
+  phaseTimer=setTimeout(()=>phaseEl.classList.remove("show"),3600);
+}
+
+/* ============================================================
+   描画
+   ============================================================ */
+let last=performance.now();
+let dtS=1/60;   // 平滑化したdt（フレームのカクつき＝盤面の一斉ジャンプを防ぐ）
+let perfEMA=1/60, slowFrames=0, downgraded=0;
+// 性能計測メータ（URL末尾に #fps を付けたとき表示）
+const fpsEl=document.getElementById("fps");
+const SHOW_FPS=(location.hash||"").indexOf("fps")>=0;
+if (SHOW_FPS) fpsEl.style.display="block";
+let fpsN=0, fpsLast=performance.now(), fpsMin=999;
+// 重い端末向けの軽量化ラダー（速い端末では発動しない）。効きの大きい順：精細度↓→重ね層を省く→精細度↓↓
+function downgradeQuality(){
+  if (downgraded===0){ Q.dprCap=1.45; layout(); }
+  else if (downgraded===1){ Q.extraTuft=false; Q.blendWash=false; }
+  else if (downgraded===2){ Q.dprCap=1.2; layout(); }
+  else return;
+  downgraded++; perfEMA=1/60; slowFrames=0;
+}
+function frame(now) {
+  // 静寂（何も育たず・漂わず・触れていない）の間はコマを間引いて電池を守る
+  const idle = (coverage===0 && motes.length===0 && steam.length===0 && !pointer.active);
+  if (Q.idleThrottle && idle && now-last < 33) { requestAnimationFrame(frame); return; }
+
+  const raw=Math.min(0.05,(now-last)/1000); last=now;
+  // 1コマだけ重いと dt が跳ね、盤面全体の菌糸が一気に育つ。EMAで均す（平均速度は保つ）。
+  dtS = dtS*0.92 + raw*0.08;
+  // 0.033(=30fps)で頭打ちにすると、満開で30fpsを割った時にシミュレーション時計が実時間より遅れ、
+  // 崩壊フェーズが異様に長引く。上限を 0.05(=20fps相当, rawの上限と同じ) にして実時間に追従させる。
+  const dt = Math.min(0.05, dtS);
+  const t=now/1000;
+
+  // 性能計測メータの更新（0.5秒ごと）
+  if (SHOW_FPS){
+    fpsN++;
+    const span=now-fpsLast;
+    if (span>=500){
+      const fps=fpsN*1000/span;
+      if (fps<fpsMin) fpsMin=fps;
+      fpsEl.textContent =
+        `${fps.toFixed(0)} fps (min ${fpsMin.toFixed(0)})\n`+
+        `dpr ${Q.dprCap}  軽量化Lv ${downgraded}\n`+
+        `茂り ${(bedDensity*100|0)}%  粒 ${grains.length}`;
+      fpsN=0; fpsLast=now;
+    }
+  }
+
+  // 実機が重ければ一度だけ画質を落とす（動いている間だけ測る。間引き中は測らない）
+  if (Q.mobile && !idle) {
+    perfEMA = perfEMA*0.9 + raw*0.1;
+    if (perfEMA > 0.026) { if (++slowFrames > 30) downgradeQuality(); }
+    else if (perfEMA < 0.020 && slowFrames>0) slowFrames -= 2;
+  }
+
+  // 撫で続けている間は温もりを置き続ける
+  if (pointer.active && pointer.x>0) tendAt(pointer.x,pointer.y,dt);
+  if (seeded) grow(dt);   // 最初のタッチ（種まき）があるまでは成長させない＝放置でも勝手に始まらない
+
+  // 室光の色温度を生命相から決める（bedDensity=茂り, bedSpore=胞子色 を読むだけ。成長・時計には不介入）。
+  {
+    const tw = Math.max(0, Math.min(1, bedDensity*1.15));   // 茂るほど暖かく
+    const tg = Math.max(0, Math.min(1, bedSpore*1.6));      // 胞子化で金緑が乗る
+    const k = 1 - Math.exp(-dt/Math.max(0.05,TUNE.lightLag)); // ゆっくり追従＝静けさを壊さない
+    ambWarm  += (tw-ambWarm)*k;
+    ambGreen += (tg-ambGreen)*k;
+  }
+  const _cool=hexRGB(TUNE.lightCool), _warm=hexRGB(TUNE.lightWarm);
+  let ambR=_cool.r+(_warm.r-_cool.r)*ambWarm,
+      ambG=_cool.g+(_warm.g-_cool.g)*ambWarm,
+      ambB=_cool.b+(_warm.b-_cool.b)*ambWarm;
+  const _gc=ambGreen*TUNE.lightGreen;                       // 金緑：緑を持ち上げ青を引く
+  ambR-=_gc*4; ambG+=_gc*42; ambB-=_gc*34;
+  ambR=Math.max(0,Math.min(255,ambR)); ambG=Math.max(0,Math.min(255,ambG)); ambB=Math.max(0,Math.min(255,ambB));
+
+  ctx.drawImage(stageCanvas,0,0,W,H);
+
+  if (TUNE.lightArc>0) {   // 空気そのものの色温度シフト（満開の麹塵色＝緑はこれが作る。必須）
+    ctx.globalCompositeOperation="soft-light";
+    ctx.globalAlpha=TUNE.lightArc*TUNE.lightWash;
+    ctx.fillStyle=`rgb(${ambR|0},${ambG|0},${ambB|0})`;
+    ctx.fillRect(0,0,W,H);
+    ctx.globalAlpha=1; ctx.globalCompositeOperation="source-over";
+  }
+
+  const breathe = reduceMotion ? 0 : Math.sin(t*TUNE.breathSpeed)*TUNE.breathDepth;
+  const dens = bedDensity;
+  // 満開付近で“重なって見えない層”だけ間引いて30fpsを保つ（緑の地色はsoft-lightが作るので平坦化しない）。
+  // 茂る途中(dens<0.62)は全層描く＝繊細さは不変。0.88でほぼ満開→隠れ層を省く。
+  let keep=1;
+  if (Q.mobile){ let u=(dens-0.62)/0.26; u=u<0?0:u>1?1:u; keep=1-u*u*(3-2*u); }
+
+  ctx.save();
+  if (Q.mobile){ ctx.beginPath(); ctx.rect(tray.x,tray.y,tray.w,tray.h); ctx.clip(); }  // 軽い矩形クリップ（角は後で下地を貼り直して丸める）
+  else { roundRect(ctx,tray.x,tray.y,tray.w,tray.h,tray.r); ctx.clip(); }
+  ctx.lineCap="round";
+
+  // (0) 米粒の種火
+  ctx.globalCompositeOperation="lighter";
+  for (const g of grains) {
+    const tw=0.8+0.2*Math.sin(t*0.9+g.twPhase);
+    const aAmber=(0.34+breathe*0.6)*tw*(1-g.bloom*0.8)*(1-g.decline*0.85)*(1-0.97*Math.min(1,g.refr/TUNE.refractory)) + g.warm*0.10;
+    if (aAmber<=0.035) continue;
+    const sz=g.len*1.7; ctx.globalAlpha=aAmber;
+    ctx.drawImage(seedGlow,g.x-sz/2,g.y-sz/2,sz,sz);
+  }
+  ctx.globalCompositeOperation="source-over";
+
+  // (0.5) 老い・枯れの色を白の「下」に敷く — 白が薄れるほど透けて現れる（白→茶→暗が連続）
+  for (const g of grains) {
+    let brown=0;
+    if (g.infected && g.decline>0.02) brown=g.decline*0.5;                          // 死にゆく：下の茶が育つ
+    else if (!g.infected && g.refr>0) brown=0.45*Math.min(1,g.refr/TUNE.refractory); // 枯れ跡：癒えるほど引く（崩れ終わりと同値で連続）
+    if (brown<=0.015) continue;
+    const sz=g.len*1.8*g.fsc;
+    ctx.globalAlpha=Math.min(0.45, brown);
+    ctx.drawImage(spentGlow, g.x+g.jx-sz/2, g.y+g.jy-sz/2, sz, sz);
+  }
+  ctx.globalAlpha=1;
+
+  // (1) 菌糸の綿地（円対称を崩し、個体差をつける）
+  for (const g of grains) {
+    if (g.bloom<=0.01) continue;
+    const lf=Math.max(dens*0.5, g.rich);
+    const vg=Math.max(0,1-g.decline*1.3);
+    const b=g.bloom, gxp=g.x+g.jx, gyp=g.y+g.jy;
+    const birth=g.be;   // 発芽イーズ（共有）
+    ctx.save();
+    ctx.translate(gxp,gyp); ctx.rotate(g.crot); ctx.scale(g.cax,g.cay);
+    let sz=g.len*(0.5+b*5.1)*g.lump;                       // 小さく芽吹いて育つ（満開時の大きさは不変）
+    ctx.globalAlpha=Math.min(1,b*(0.2+lf*0.45)*g.bright*vg)*birth;
+    ctx.drawImage(bloomSprite,-sz/2,-sz/2,sz,sz);
+    sz=g.len*(0.3+b*2.4)*g.lump;
+    const ox=g.cdx*sz*0.18, oy=g.cdy*sz*0.18;   // 二枚目をずらして“いびつ”に
+    const a2c=Math.min(1,b*(0.36+lf*0.6)*g.bright*vg)*birth*keep;
+    if (a2c>0.01){ ctx.globalAlpha=a2c; ctx.drawImage(bloomSprite,ox-sz/2,oy-sz/2,sz,sz); }
+    ctx.restore();
+  }
+
+  // (sprout) 芽吹き
+  for (const g of grains) {
+    if (g.bloom<=0.005||g.bloom>0.85||g.decline>0.1) continue;
+    const lf=Math.max(dens*0.5,g.rich);
+    const p=Math.min(1,g.bloom/0.55), prog=p*p*(3-2*p);
+    let fade=g.bloom<0.55?1:Math.max(0,1-(g.bloom-0.55)/0.3);
+    fade*=g.be;                                    // 発芽からなめらかに立ち上げる
+    if (fade<=0.01) continue;
+    const scale=0.2+lf*0.7, lw=Math.max(0.5,g.len*0.09);
+    for (const sp of g.sprouts) {
+      const L=g.len*sp.len*prog*scale;
+      const dx=Math.cos(sp.ang), dy=Math.sin(sp.ang);
+      const ex=g.x+dx*L, ey=g.y+dy*L-L*0.12;
+      const nx=Math.cos(sp.ang+1.57), ny=Math.sin(sp.ang+1.57);
+      const mx=g.x+dx*L*0.5+nx*sp.bend*L*0.3, my=g.y+dy*L*0.5+ny*sp.bend*L*0.3-L*0.06;
+      ctx.lineWidth=lw; ctx.strokeStyle="rgba(252,250,243,"+(0.5*fade)+")";
+      ctx.beginPath(); ctx.moveTo(g.x,g.y); ctx.quadraticCurveTo(mx,my,ex,ey); ctx.stroke();
+      if (!Q.mobile){ ctx.fillStyle="rgba(255,253,246,"+(0.6*fade)+")";
+        ctx.beginPath(); ctx.arc(ex,ey,Math.max(0.7,g.len*0.12),0,6.2832); ctx.fill(); }
+    }
+  }
+
+  // (moya) もやし菌糸 — 密度が上がるほど綿に隠れるので滑らかに引く（しきい値の一斉ON/OFFを廃止＝パッと出現の解消）
+  const hyphaFade=Math.max(0,Math.min(1,(0.80-dens)/0.20));
+  if (hyphaFade>0.01){ ctx.globalAlpha=hyphaFade;
+  for (const g of grains) {
+    if (!g.moya||g.moya.length===0||g.bloom<=0.05||g.decline>0.1) continue;
+    const lf=Math.max(dens*0.5,g.rich);
+    const p=Math.min(1,g.bloom/0.85), prog=p*p*(3-2*p), scale=0.25+lf*0.7, lw=Math.max(0.5,g.len*0.07);
+    for (const sp of g.moya) {
+      const sway=reduceMotion?0:Math.sin(t*0.4+sp.ph)*0.12, ang=sp.ang+sway;
+      const L=g.len*sp.len*prog*scale;
+      const dx=Math.cos(ang), dy=Math.sin(ang);
+      const ex=g.x+dx*L, ey=g.y+dy*L-L*0.18;
+      const nx=Math.cos(ang+1.57), ny=Math.sin(ang+1.57);
+      const mx=g.x+dx*L*0.45+nx*sp.bend*L*0.35, my=g.y+dy*L*0.45+ny*sp.bend*L*0.35-L*0.1;
+      ctx.lineWidth=lw; ctx.strokeStyle="rgba(250,249,244,0.2)";
+      ctx.beginPath(); ctx.moveTo(g.x,g.y); ctx.quadraticCurveTo(mx,my,ex,ey); ctx.stroke();
+      if (!Q.mobile){ ctx.fillStyle="rgba(255,253,247,0.28)";
+        ctx.beginPath(); ctx.arc(ex,ey,Math.max(0.8,g.len*0.13),0,6.2832); ctx.fill(); }
+    }
+  }
+  ctx.globalAlpha=1; }
+
+  // (web) 菌糸のマット（隣どうしを繋ぐ）— 同じく密度で滑らかに引く
+  if (hyphaFade>0.01){ ctx.globalAlpha=hyphaFade;
+  for (const g of grains) {
+    if (g.bloom<0.25) continue;
+    const ax=g.x+g.jx, ay=g.y+g.jy;
+    let wc=0;
+    for (const j of g.hyph) {
+      if (Q.mobile && wc>=2) break;
+      const b2=grains[j]; if (b2.bloom<0.25) continue;
+      wc++;
+      const lf=Math.max(dens*0.4, Math.min(g.rich,b2.rich));
+      const bx=b2.x+b2.jx, by=b2.y+b2.jy, str=Math.min(g.bloom,b2.bloom);
+      const mx=(ax+bx)/2+Math.sin((g.x+g.y)*0.05)*4, my=(ay+by)/2+Math.cos((g.x-g.y)*0.05)*4;
+      ctx.lineWidth=(0.8+lf*1.4);
+      ctx.strokeStyle="rgba(250,247,238,"+((0.05+str*(0.14+lf*0.3))*(1-g.decline))+")";
+      ctx.beginPath(); ctx.moveTo(ax,ay); ctx.quadraticCurveTo(mx,my,bx,by); ctx.stroke();
+    }
+  }
+  ctx.globalAlpha=1; }
+
+  // (2) 放射状の菌糸（回転＋非等方スケール＋スキューで反復を崩す）
+  for (const g of grains) {
+    if (g.bloom<=0.02) continue;
+    const tbirth=g.be;
+    const lf=Math.max(dens*0.5,g.rich), lb=lf*lf, vg=Math.max(0,1-g.decline*1.3);
+    const reach=Math.pow(g.bloom,0.6)*(0.42+lf*0.55+lb*0.65)*(0.5+0.5*vg);
+    const sz=g.len*3.0*g.fsc*reach;
+    const sway=reduceMotion?0:Math.sin(t*0.5+g.twPhase)*0.03;
+    const N=tuftSprites.length;
+    ctx.save();
+    ctx.translate(g.x+g.jx,g.y+g.jy); ctx.rotate(g.frot+sway);
+    ctx.scale(g.tax,g.tay); ctx.transform(1,0,g.tsk,1,0,0);
+    ctx.globalAlpha=Math.min(1,g.bloom*(0.4+lf*0.5+lb*0.5))*vg*tbirth;
+    ctx.drawImage(tuftSprites[g.tuft],-sz/2,-sz/2,sz,sz);
+    if (lf>0.3) {
+      const a2=Math.min(1,((lf-0.3)*1.1+lb*0.5)*g.bloom)*vg*tbirth*keep, sz2=sz*0.82;
+      if (a2>0.01){ ctx.rotate(1.1+g.twPhase); ctx.globalAlpha=a2;
+        ctx.drawImage(tuftSprites[(g.tuft+3)%N],-sz2/2,-sz2/2,sz2,sz2); }
+    }
+    if (Q.extraTuft && lb>0.45) {
+      const t3=Math.max(0,Math.min(1,(0.88-dens)/0.16));
+      if (t3>0.01){
+        const a3=Math.min(1,(lb-0.45)*1.7*g.bloom), sz3=sz*0.66;
+        ctx.rotate(-1.9); ctx.globalAlpha=a3*vg*tbirth*t3;
+        ctx.drawImage(tuftSprites[(g.tuft+6)%N],-sz3/2,-sz3/2,sz3,sz3);
+      }
+    }
+    ctx.restore();
+  }
+
+  // (3) 分生子頭（撫でた跡＝rich が育つほど現れる）
+  for (const g of grains) {
+    if (!g.head) continue;
+    const lf=Math.max(dens*0.5,g.rich), ph2=g.rich;
+    const m=(g.bloom-0.28)*(0.45+lf*0.9);
+    if (m<=0.004) continue;
+    const ms=Math.min(1,(m-0.004)/0.09), mFade=ms*ms*(3-2*ms);   // 閾値付近で0からなめらかに立ち上げる
+    const fadeIn=mFade*g.be;
+    const sz=g.len*3.6*g.fsc*(0.65+Math.min(1,m)*0.7)*(0.5+0.7*ph2);
+    ctx.save();
+    ctx.translate(g.x+g.jx,g.y+g.jy);
+    const shA=Math.min(0.34,m*0.8)*(0.1+0.9*ph2)*(1-g.decline)*fadeIn;
+    if (shA>0.004) {
+      ctx.globalAlpha=shA;
+      const ssz=sz*1.15;
+      ctx.drawImage(shadowSprite,-ssz/2,-ssz/2,ssz,ssz);
+    }
+    ctx.rotate(g.hrot);
+    const ha=Math.min(0.98,m*2.3)*(0.06+0.94*ph2)*(1-g.decline)*fadeIn;
+    const prog=Math.min(1, Math.max(0,(g.spore-0.28)/0.45)*TUNE.greenShow);
+    const seg=rampSeg(TUNE.sporeRamp, prog);
+    ctx.globalAlpha=ha*(1-seg.t);
+    ctx.drawImage(headRamp[seg.i][g.hidx],-sz/2,-sz/2,sz,sz);
+    if (seg.t>0.02){
+      ctx.globalAlpha=ha*seg.t;
+      ctx.drawImage(headRamp[seg.j][g.hidx],-sz/2,-sz/2,sz,sz);
+    }
+    ctx.restore();
+  }
+
+  // (3.5) 胞子の色づき — 熟した所ほど綿地が色づく（白→淡黄→黄緑→麹塵。頭と同じ道筋）
+  const washStops=TUNE.sporeRamp.filter(s=>s.c);   // 淡黄・黄緑・麹塵の3枚に対応（sporeGlowRampと同順）
+  for (const g of grains) {
+    if (g.spore<=0.3) continue;
+    const sz=g.len*1.9*g.fsc*(0.5+g.rich*0.4);
+    const a=Math.min(0.45, Math.min(0.28, (g.spore-0.3)*0.6)*TUNE.greenShow);
+    if (a<=0.004) continue;
+    const prog=Math.min(1, Math.max(0,(g.spore-0.28)/0.45)*TUNE.greenShow);
+    const seg=rampSeg(washStops, prog);
+    ctx.globalAlpha=a*(1-seg.t);
+    ctx.drawImage(sporeGlowRamp[seg.i], g.x+g.jx-sz/2, g.y+g.jy-sz/2, sz, sz);
+    if (Q.blendWash && seg.t>0.02){
+      ctx.globalAlpha=a*seg.t;
+      ctx.drawImage(sporeGlowRamp[seg.j], g.x+g.jx-sz/2, g.y+g.jy-sz/2, sz, sz);
+    }
+  }
+  ctx.globalAlpha=1;
+
+  // (4) 生命感の差し色 — 密度で滑らかに引く
+  ctx.globalCompositeOperation="lighter";
+  const accFade=Math.max(0,Math.min(1,(0.72-dens)/0.16));
+  if (accFade>0.01) for (const g of grains) {
+    if (g.bloom<0.5) continue;
+    const a=(g.bloom-0.5)*0.2*(0.4+breathe*2.0)*Math.max(0,1-g.decline*1.6)*accFade;
+    if (a<=0.02) continue;
+    const sz=g.len*2.0; ctx.globalAlpha=a;
+    ctx.drawImage(bloomSprite,g.x+g.jx-sz/2,g.y+g.jy-sz/2,sz,sz);
+  }
+  ctx.globalAlpha=1; ctx.globalCompositeOperation="source-over";
+  ctx.restore();
+
+  // 湯気と胞子
+  updateParticles(dt,t,true);
+
+  // 指先の応答
+  if (pointer.x>0 && (pointer.active || !("ontouchstart" in window))) {
+    const sz=Math.min(W,H)*0.16;
+    ctx.globalCompositeOperation="lighter";
+    ctx.globalAlpha=0.18;
+    ctx.drawImage(bloomSprite,pointer.x-sz/2,pointer.y-sz/2,sz,sz);
+    // やわらかな手の点
+    ctx.globalAlpha=0.5;
+    const dot=ctx.createRadialGradient(pointer.x,pointer.y,0,pointer.x,pointer.y,7);
+    dot.addColorStop(0,"rgba(255,236,205,0.9)"); dot.addColorStop(1,"rgba(255,236,205,0)");
+    ctx.fillStyle=dot; ctx.beginPath(); ctx.arc(pointer.x,pointer.y,7,0,6.2832); ctx.fill();
+    ctx.globalAlpha=1; ctx.globalCompositeOperation="source-over";
+  }
+
+  // 室の光（生命が満ちるほど暖まる）。色は相に応じて寒↔暖↔金緑へ。lightArc=0 で従来の琥珀のまま。
+  ctx.globalCompositeOperation="lighter";
+  const wa=TUNE.warmGlow*(0.8+breathe*2.0+Math.pow(bedDensity,2)*0.18);
+  const gr=Math.round(255+(ambR-255)*TUNE.lightArc),
+        gg=Math.round(202+(ambG-202)*TUNE.lightArc),
+        gb=Math.round(122+(ambB-122)*TUNE.lightArc);   // 基準 #ffca7a から ambient へ補間
+  const warm=ctx.createRadialGradient(W/2,H*0.44,0,W/2,H*0.5,Math.max(W,H)*0.6);
+  warm.addColorStop(0,`rgba(${gr},${gg},${gb},${wa})`); warm.addColorStop(1,`rgba(${gr},${gg},${gb},0)`);
+  ctx.fillStyle=warm; ctx.fillRect(0,0,W,H);
+  ctx.globalCompositeOperation="source-over";
+
+  // 周辺の暗がり
+  {
+    const vig=ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.3,W/2,H/2,Math.max(W,H)*0.72);
+    vig.addColorStop(0,"rgba(0,0,0,0)"); vig.addColorStop(1,"rgba(0,0,0,0.55)");
+    ctx.fillStyle=vig; ctx.fillRect(0,0,W,H);
+  }
+
+  // モバイル：軽い矩形クリップで描いたので、最後に四隅の「角丸の外側」だけ下地を貼り直して角の潰れを防ぐ
+  // （重いループ全体を角丸クリップで包まず、極小の4枚だけ処理＝パフォーマンス優先のまま角を丸める）
+  if (Q.mobile) {
+    const r=tray.r, x=tray.x, y=tray.y, w=tray.w, h=tray.h, PI=Math.PI;
+    const notch=[
+      ()=>{ctx.moveTo(x,y);     ctx.lineTo(x+r,y);     ctx.arc(x+r,  y+r,  r,-PI/2,PI,  true);},
+      ()=>{ctx.moveTo(x+w,y);   ctx.lineTo(x+w-r,y);   ctx.arc(x+w-r,y+r,  r,-PI/2,0,   false);},
+      ()=>{ctx.moveTo(x+w,y+h); ctx.lineTo(x+w,y+h-r); ctx.arc(x+w-r,y+h-r,r,0,    PI/2,false);},
+      ()=>{ctx.moveTo(x,y+h);   ctx.lineTo(x+r,y+h);   ctx.arc(x+r,  y+h-r,r,PI/2, PI,  false);},
+    ];
+    for (const c of notch){ ctx.save(); ctx.beginPath(); c(); ctx.closePath(); ctx.clip(); ctx.drawImage(stageCanvas,0,0,W,H); ctx.restore(); }
+  }
+
+  requestAnimationFrame(frame);
+}
+
+/* ---- 湯気と胞子 ---- */
+function makeSteam(x,y,scale=1){
+  return {x,y,vy:-(8+Math.random()*14),vx:(Math.random()-0.5)*6,life:0,max:3+Math.random()*2.5,sz:(40+Math.random()*60)*scale,ph:Math.random()*6.28};
+}
+function makeMote(x,y,live){
+  const lv=!!live;
+  return {x,y,
+    vy:lv?-(0.5+Math.random()*1.5):-(3+Math.random()*5),
+    vx:(Math.random()-0.5)*(lv?22:8),
+    life:0, max:lv?(6+Math.random()*5):(4+Math.random()*3),
+    sz:lv?(1.8+Math.random()*1.6):(1.5+Math.random()*1.5),
+    ph:Math.random()*6.28, live:lv};
+}
+function updateParticles(dt,t,advance=true) {
+  const maxS=TUNE.steamMax+Math.floor(bedDensity*Q.steamDensityK);
+  if (advance && !reduceMotion && steam.length<maxS && Math.random()<0.10+bedDensity*(Q.mobile?0.18:0.7)) {
+    const px=tray.x+Math.random()*tray.w, py=tray.y+tray.h*(0.4+Math.random()*0.6);
+    steam.push(makeSteam(px,py,0.7+bedDensity*Q.steamScaleK));
+  }
+  for (let i=steam.length-1;i>=0;i--) {
+    const p=steam[i];
+    if (advance){ p.life+=dt; if(p.life>p.max){steam.splice(i,1);continue;} p.x+=(p.vx+Math.sin(t+p.ph)*6)*dt; p.y+=p.vy*dt; p.vy*=0.995; }
+    const k=p.life/p.max;
+    const a=Math.max(0,Math.sin(k*Math.PI))*0.15, sz=p.sz*(0.6+k*1.1);
+    ctx.globalAlpha=a; ctx.drawImage(steamSprite,p.x-sz/2,p.y-sz/2,sz,sz);
+  }
+  ctx.globalCompositeOperation="lighter";
+  const landR=Math.min(W,H)*TUNE.landRadius, landR2=landR*landR;
+  for (let i=motes.length-1;i>=0;i--) {
+    const m=motes[i];
+    if (advance){
+    m.life+=dt;
+    if (m.life>m.max){motes.splice(i,1);continue;}
+    m.x+=(m.vx+Math.sin(t*0.8+m.ph)*5)*dt; m.y+=m.vy*dt;
+    // 生きた胞子は、漂いながら開けた静かな地に着地して芽吹かせる（円環を閉じる）
+    if (m.live && m.life>1.0 && Math.random()<TUNE.landChance*Math.max(0,1-coverage/TUNE.covGate)*biasF(TUNE.field?fieldAt((m.x-tray.x)/tray.w,(m.y-tray.y)/tray.h,fieldPhase):0.5,TUNE.fieldGerm)) {
+      let bi=-1, bd=landR2;
+      for (let j=0;j<grains.length;j++){
+        const g=grains[j]; if (g.infected || g.refr>0) continue;
+        const dx=g.x-m.x, dy=g.y-m.y, d2=dx*dx+dy*dy;
+        if (d2>=bd) continue;
+        let inf=0; for (const nj of g.nbrs) if (grains[nj].infected) inf++;
+        if (inf>2) continue;   // 生きた菌糸に囲まれた穴は埋めない＝旧世代に重ねない
+        bd=d2; bi=j;
+      }
+      if (bi>=0){
+        const g=grains[bi];
+        g.infected=true; g.bloom=Math.max(g.bloom,0.04); g.seedAge=0; g.be=0;
+        g.wake=Math.random()*TUNE.wakeJitter; g.decline=0; g.hold=-1; g.dying=false;
+        motes.splice(i,1); continue;
+      }
+    }
+    }
+    const k=m.life/m.max;
+    ctx.globalAlpha=Math.max(0,Math.sin(k*Math.PI))*(m.live?0.5:0.45);
+    ctx.fillStyle=m.live?"#c6c768":"#fff6e2";   // 生きた胞子は黄緑（色の道筋に合わせる）
+    ctx.beginPath(); ctx.arc(m.x,m.y,m.sz,0,6.2832); ctx.fill();
+  }
+  ctx.globalAlpha=1; ctx.globalCompositeOperation="source-over";
+}
+
+
+/* ============================================================
+   操作
+   ============================================================ */
+function pos(e){ const r=canvas.getBoundingClientRect(); return {x:e.clientX-r.left,y:e.clientY-r.top}; }
+
+canvas.addEventListener("pointerdown", e=>{
+  const p=pos(e); pointer.x=p.x; pointer.y=p.y; pointer.active=true;
+  plantAt(p.x,p.y);          // どこでも・何度でも種をまける（既に菌があれば温めるだけ）
+  tendAt(p.x,p.y,0.05);
+});
+canvas.addEventListener("pointermove", e=>{
+  const p=pos(e); pointer.x=p.x; pointer.y=p.y;
+  // マウスはホバーで“撫でる”（指で描くように育てられる）
+  if (e.pointerType==="mouse") pointer.active=true;
+  if (pointer.active) {
+    const now=performance.now();
+    if (now-pointer.lastPuff>120 && !reduceMotion && steam.length<TUNE.steamMax+10) {
+      steam.push(makeSteam(p.x,p.y,0.5)); pointer.lastPuff=now;
+    }
+  }
+});
+canvas.addEventListener("pointerup",   ()=>{ if("ontouchstart"in window) pointer.active=false; });
+canvas.addEventListener("pointerleave",()=>{ pointer.active=false; pointer.x=-1; });
+
+// 長押しの選択メニュー対策の保険（CSSだけで止まらない端末向け。なぞる操作には影響しない）
+canvas.addEventListener("contextmenu", e=>e.preventDefault());
+canvas.addEventListener("selectstart", e=>e.preventDefault());
+
+replayEl.addEventListener("click", ()=>reset());
+
+/* ============================================================
+   道具
+   ============================================================ */
+function rampSeg(stops, prog){
+  // prog(0..1)を色ストップ列に写像。隣り合う2ストップの番号 i,j と混ぜ率 t(0..1) を返す
+  let i=0;
+  while (i<stops.length-1 && prog>stops[i+1].pos) i++;
+  const j=Math.min(i+1, stops.length-1);
+  const span=Math.max(1e-6, stops[j].pos-stops[i].pos);
+  let t=(prog-stops[i].pos)/span;
+  t=t<0?0:(t>1?1:t);
+  return {i,j,t};
+}
+function roundRect(c,x,y,w,h,r){
+  c.beginPath();
+  c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r);
+  c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath();
+}
+function hexRGB(hex){hex=hex.replace("#","");if(hex.length>6)hex=hex.slice(0,6);return{r:parseInt(hex.slice(0,2),16),g:parseInt(hex.slice(2,4),16),b:parseInt(hex.slice(4,6),16)};}
+function hexA(hex,a){const{r,g,b}=hexRGB(hex);return `rgba(${r},${g},${b},${a})`;}
+
+/* ---- 起動 ---- */
+if (!TUNE.bilingual) document.body.classList.add("mono");   // 0なら英語を隠す＝日本語のみ
+if (IS_MOBILE) document.body.classList.add("mobile");       // モバイル判定（PC専用の改行制御などに使用。英語併記は復活）
+
+// リサイズは連続発火する（特にiOSのアドレスバー出入り）。少し待ってから一度だけ作り直す。
+let _resizeTimer=null;
+function onResize(){ clearTimeout(_resizeTimer); _resizeTimer=setTimeout(layout, 150); }
+window.addEventListener("resize", onResize);
+window.addEventListener("orientationchange", onResize);
+
+buildSprites();   // スプライトは画面サイズに依らない＝起動時に一度だけ（リサイズで作り直さない）
+layout();
+requestAnimationFrame(frame);
+// 導入（ロゴのタイトルカード）を、最初の描画後にそっと立ち上げる
+requestAnimationFrame(()=>requestAnimationFrame(()=>hintEl.classList.add("in")));
+</script>
