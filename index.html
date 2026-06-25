@@ -464,7 +464,9 @@ function plantAt(px,py) {
   }
   if (planted) {
     if (!reduceMotion) for (let i=0;i<(Q.mobile?3:8);i++) steam.push(makeSteam(px+(Math.random()-0.5)*40,py+(Math.random()-0.5)*40,0.5));
-    if (!seeded){ seeded=true; hintEl.classList.add("gone"); replayEl.classList.add("show"); }
+    if (!seeded){ seeded=true; hintEl.classList.add("gone");
+      // 導入文（下端の署名つき）が消えきってからボタンを出す＝署名と「はじめから」が重ならない
+      setTimeout(()=>{ if (seeded) replayEl.classList.add("show"); }, 1900); }
     if (!taught){ taught=true; setTimeout(()=>sayPhase("や さ し く 、 な で て","tend it, gently"),900); }
   }
   return planted;
