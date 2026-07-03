@@ -1,3 +1,4 @@
+<!DOCTYPE html>
 <!--
   麹（こうじ）育成 — 「撫でで育てる」版プロトタイプ
   変更の核心：成長はタイマーではなく“あなたの手”が駆動する。
@@ -7,8 +8,11 @@
     ・離すと冷めて、そっと休む（終わらない・固まらない）
   TUNE の数値で「もっとゆっくり」「もっと指に追従」を調整できる。
 -->
+<html lang="ja">
+<head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>麹 — 撫でで育てる</title>
 <style>
   :root {
     --bg-0:#0c0907; --bg-1:#1b1410; --ink:#e7ddca;
@@ -97,6 +101,8 @@
     pointer-events:none; white-space:pre; letter-spacing:.02em;
   }
 </style>
+</head>
+<body>
 
 <canvas id="stage"></canvas>
 
@@ -235,7 +241,7 @@ let tray = { x:0, y:0, w:0, h:0, r:0 };
 let grains = [];
 let stageCanvas = null;
 let bloomSprite=null, steamSprite=null;
-let tuftSprites=[], seedGlow=null, headSprites=[];
+let tuftSprites=[], seedGlow=null, seedGlowVar=[], headSprites=[];
 let headRamp=[], sporeGlowRamp=[], shadowSprite=null, spentGlow=null;   // 胞子化の色ランプ/綿地の色ランプ/影/枯れ色
 
 let seeded=false, taught=false, greened=false;
@@ -243,7 +249,14 @@ let coverage=0, bedDensity=0, bedSpore=0;
 let ambWarm=0, ambGreen=0;   // 室光の色温度（なめらかに追従。生命相を読むだけ）
 
 const steam=[], motes=[];
-let pointer = { x:-1, y:-1, active:false, lastPuff:0 };
+// 撫でている指／ホバー中のマウスを pointerId ごとに保持（マルチタッチ：両手・複数指で同時に育てられる）
+const pointers = new Map();   // pointerId -> {x, y}
+let lastPuff = 0;             // 湯気パフの間引き（全ポインタ共通）
+function setPointer(id, x, y){
+  const p = pointers.get(id);
+  if (p){ p.x=x; p.y=y; return p; }
+  const np={x,y}; pointers.set(id,np); return np;
+}
 
 /* ---- レイアウト ---- */
 function layout() {
@@ -347,6 +360,13 @@ function buildSprites() {
   // 分生子頭の色ランプ：各ストップごとに白スプライトを着色した版を用意（白→淡黄→黄緑→麹塵）
   headRamp=TUNE.sporeRamp.map(s=> s.c==null ? headSprites : headSprites.map(h=>tintSprite(h, s.c, s.a)));
   seedGlow=makeGlow(64,"rgba(255,198,124,0.95)","rgba(255,198,124,0)");
+  // 種火の個体差：蒸し穀物のムラらしく、粒ごとに暖色みを僅かに振る（g.tone で選ぶ。冷↔暖の4段）
+  seedGlowVar=[
+    makeGlow(64,"rgba(255,190,116,0.95)","rgba(255,190,116,0)"),
+    makeGlow(64,"rgba(255,198,124,0.95)","rgba(255,198,124,0)"),
+    makeGlow(64,"rgba(255,206,140,0.95)","rgba(255,206,140,0)"),
+    makeGlow(64,"rgba(255,214,158,0.95)","rgba(255,214,158,0)"),
+  ];
   // 綿地ににじむ色も同じ道筋で。白を除いた淡黄・黄緑・麹塵の3枚を持ち、胞子の進みで切り替える
   sporeGlowRamp=TUNE.sporeRamp.filter(s=>s.c).map(s=>makeGlow(96, hexA(s.c,0.9), hexA(s.c,0)));
   shadowSprite=makeGlow(96,"rgba(40,30,16,0.5)","rgba(40,30,16,0)");        // 分生子頭の陰（source-overで軽く）
@@ -614,7 +634,7 @@ function downgradeQuality(){
 }
 function frame(now) {
   // 静寂（何も育たず・漂わず・触れていない）の間はコマを間引いて電池を守る
-  const idle = (coverage===0 && motes.length===0 && steam.length===0 && !pointer.active);
+  const idle = (coverage===0 && motes.length===0 && steam.length===0 && pointers.size===0);
   if (Q.idleThrottle && idle && now-last < 33) { requestAnimationFrame(frame); return; }
 
   const raw=Math.min(0.05,(now-last)/1000); last=now;
@@ -648,7 +668,7 @@ function frame(now) {
   }
 
   // 撫で続けている間は温もりを置き続ける
-  if (pointer.active && pointer.x>0) tendAt(pointer.x,pointer.y,dt);
+  if (pointers.size) for (const p of pointers.values()) if (p.x>0) tendAt(p.x,p.y,dt);
   if (seeded) grow(dt);   // 最初のタッチ（種まき）があるまでは成長させない＝放置でも勝手に始まらない
 
   // 室光の色温度を生命相から決める（bedDensity=茂り, bedSpore=胞子色 を読むだけ。成長・時計には不介入）。
@@ -695,8 +715,9 @@ function frame(now) {
     const tw=0.8+0.2*Math.sin(t*0.9+g.twPhase);
     const aAmber=(0.34+breathe*0.6)*tw*(1-g.bloom*0.8)*(1-g.decline*0.85)*(1-0.97*Math.min(1,g.refr/TUNE.refractory)) + g.warm*0.10;
     if (aAmber<=0.035) continue;
+    const ti=g.tone<0.94?0:g.tone<1.02?1:g.tone<1.09?2:3;   // 粒の暖色みで種火を選ぶ（個体差）
     const sz=g.len*1.7; ctx.globalAlpha=aAmber;
-    ctx.drawImage(seedGlow,g.x-sz/2,g.y-sz/2,sz,sz);
+    ctx.drawImage(seedGlowVar[ti],g.x-sz/2,g.y-sz/2,sz,sz);
   }
   ctx.globalCompositeOperation="source-over";
 
@@ -889,17 +910,20 @@ function frame(now) {
   // 湯気と胞子
   updateParticles(dt,t,true);
 
-  // 指先の応答
-  if (pointer.x>0 && (pointer.active || !("ontouchstart" in window))) {
+  // 指先の応答（撫でている指／ホバー中のマウスすべてに、それぞれ描く）
+  if (pointers.size) {
     const sz=Math.min(W,H)*0.16;
     ctx.globalCompositeOperation="lighter";
-    ctx.globalAlpha=0.18;
-    ctx.drawImage(bloomSprite,pointer.x-sz/2,pointer.y-sz/2,sz,sz);
-    // やわらかな手の点
-    ctx.globalAlpha=0.5;
-    const dot=ctx.createRadialGradient(pointer.x,pointer.y,0,pointer.x,pointer.y,7);
-    dot.addColorStop(0,"rgba(255,236,205,0.9)"); dot.addColorStop(1,"rgba(255,236,205,0)");
-    ctx.fillStyle=dot; ctx.beginPath(); ctx.arc(pointer.x,pointer.y,7,0,6.2832); ctx.fill();
+    for (const p of pointers.values()) {
+      if (p.x<=0) continue;
+      ctx.globalAlpha=0.18;
+      ctx.drawImage(bloomSprite,p.x-sz/2,p.y-sz/2,sz,sz);
+      // やわらかな手の点
+      ctx.globalAlpha=0.5;
+      const dot=ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,7);
+      dot.addColorStop(0,"rgba(255,236,205,0.9)"); dot.addColorStop(1,"rgba(255,236,205,0)");
+      ctx.fillStyle=dot; ctx.beginPath(); ctx.arc(p.x,p.y,7,0,6.2832); ctx.fill();
+    }
     ctx.globalAlpha=1; ctx.globalCompositeOperation="source-over";
   }
 
@@ -1005,29 +1029,52 @@ function updateParticles(dt,t,advance=true) {
 function pos(e){ const r=canvas.getBoundingClientRect(); return {x:e.clientX-r.left,y:e.clientY-r.top}; }
 
 canvas.addEventListener("pointerdown", e=>{
-  const p=pos(e); pointer.x=p.x; pointer.y=p.y; pointer.active=true;
+  const p=pos(e); setPointer(e.pointerId, p.x, p.y);   // この指を“撫でている”集合へ加える
+  if (!wantWake){ wantWake=true; acquireWakeLock(); }  // 最初の操作を起点に画面の消灯を防ぐ
   plantAt(p.x,p.y);          // どこでも・何度でも種をまける（既に菌があれば温めるだけ）
   tendAt(p.x,p.y,0.05);
 });
 canvas.addEventListener("pointermove", e=>{
-  const p=pos(e); pointer.x=p.x; pointer.y=p.y;
-  // マウスはホバーで“撫でる”（指で描くように育てられる）
-  if (e.pointerType==="mouse") pointer.active=true;
-  if (pointer.active) {
+  const p=pos(e);
+  // マウスはホバーで“撫でる”（触れていなくても集合に載せて追従）。指・ペンは接地中のみ更新。
+  if (e.pointerType==="mouse") setPointer(e.pointerId, p.x, p.y);
+  else if (pointers.has(e.pointerId)) setPointer(e.pointerId, p.x, p.y);
+  if (pointers.has(e.pointerId)) {
     const now=performance.now();
-    if (now-pointer.lastPuff>120 && !reduceMotion && steam.length<TUNE.steamMax+10) {
-      steam.push(makeSteam(p.x,p.y,0.5)); pointer.lastPuff=now;
+    if (now-lastPuff>120 && !reduceMotion && steam.length<TUNE.steamMax+10) {
+      steam.push(makeSteam(p.x,p.y,0.5)); lastPuff=now;
     }
   }
 });
-canvas.addEventListener("pointerup",   ()=>{ if("ontouchstart"in window) pointer.active=false; });
-canvas.addEventListener("pointerleave",()=>{ pointer.active=false; pointer.x=-1; });
+// 指・ペンは離せば撫で終わり。マウスはホバーで撫で続けるので up では消さない（leave で消える）。
+canvas.addEventListener("pointerup",   e=>{ if(e.pointerType!=="mouse") pointers.delete(e.pointerId); });
+canvas.addEventListener("pointerleave",e=>{ pointers.delete(e.pointerId); });
+// 通知・着信・システムジェスチャ等で操作が中断されると pointerup が来ないことがある。
+// pointercancel を拾って“触れていないのに温もりを置き続ける”状態を防ぐ。
+canvas.addEventListener("pointercancel",e=>{ pointers.delete(e.pointerId); });
 
 // 長押しの選択メニュー対策の保険（CSSだけで止まらない端末向け。なぞる操作には影響しない）
 canvas.addEventListener("contextmenu", e=>e.preventDefault());
 canvas.addEventListener("selectstart", e=>e.preventDefault());
 
 replayEl.addEventListener("click", ()=>reset());
+
+/* ============================================================
+   画面の消灯防止（鑑賞が途切れないように）
+   ・最初に触れて種をまいてから取得（ユーザー操作を起点に）
+   ・タブが隠れると自動解放されるので、戻ってきたら取り直す
+   ・未対応（Wake Lock 非対応ブラウザ）や拒否は静かに無視
+   ============================================================ */
+let wakeLock=null, wantWake=false;
+async function acquireWakeLock(){
+  if (!("wakeLock" in navigator) || !wantWake) return;
+  if (wakeLock && !wakeLock.released) return;   // 既に保持中
+  try { wakeLock = await navigator.wakeLock.request("screen"); }
+  catch(e) { /* 未対応・拒否は無視 */ }
+}
+document.addEventListener("visibilitychange", ()=>{
+  if (document.visibilityState==="visible") acquireWakeLock();
+});
 
 /* ============================================================
    道具
@@ -1066,3 +1113,5 @@ requestAnimationFrame(frame);
 // 導入（ロゴのタイトルカード）を、最初の描画後にそっと立ち上げる
 requestAnimationFrame(()=>requestAnimationFrame(()=>hintEl.classList.add("in")));
 </script>
+</body>
+</html>
